@@ -68,7 +68,7 @@ The skill calls tools from these MCP servers (all already connected in this envi
 ## What gets created
 
 - **Notion** — one DB named `AI To-Dos` (created on first run if missing) with rows including `Task`, `Owner`, `Due Date`, `Source`, `Source Link`, `Source ID`, `Status`, `Priority`, `Confidence`, `Notes`.
-- **Google Calendar** — a 15-min timed event at 07:30 America/Denver on the due date, marked **Free** (`transparency: transparent`), with a popup reminder at event start. Title prefixed `[PM]`.
+- **Google Calendar** — a 30-min timed event from 07:30–08:00 America/Denver on the due date, marked **Free** (`transparency: transparent`), with a popup reminder at event start. Title prefixed `[PM]`.
 - **Gmail draft** — one digest per run titled `PM digest — YYYY-MM-DD Morning|EOD`, addressed to yourself. Not sent.
 - **Local markdown** — appended to `~/todos/YYYY-MM-DD.md`.
 
