@@ -1,0 +1,10 @@
+{
+  "user_name": "",
+  "user_emails": [],
+  "user_aliases": [],
+  "notion_db_id": "",
+  "notion_db_name": "AI To-Dos",
+  "last_run_at": "",
+  "local_todo_dir": "~/todos",
+  "timezone": "America/Denver"
+}
