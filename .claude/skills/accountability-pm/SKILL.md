@@ -44,11 +44,15 @@ Run these phases in order. Do **not** parallelize phase 1 with the others — la
    - Merge into `user_emails[]` (lowercased), set `user_name`, persist back to `config.json`.
 3. If `notion_db_id` is missing, find it:
    - Call `mcp__276eb2b6-f7d9-4ba0-a00b-e5dc42203619__notion-search` with `query: "<notion_db_name>"` and `filter: { property: "object", value: "database" }` equivalent.
-   - If found, save the id. If not found, create the database with `mcp__276eb2b6-f7d9-4ba0-a00b-e5dc42203619__notion-create-database` using the schema below, then save the id.
-4. Determine the scan window:
+   - If found, save the id. If not found, create the database with `mcp__276eb2b6-f7d9-4ba0-a00b-e5dc42203619__notion-create-database` using the schema below, then save the id and the `data_source_id` (Notion's `data_source_id`, used by `notion-create-pages` with `parent.type: "data_source_id"`).
+4. If `pm_calendar_id` is missing, ensure the dedicated calendar exists:
+   - Call `mcp__8d04fe23-2dbe-401a-b4f1-41d3f620dfff__list_calendars`.
+   - If a calendar named `PM To-dos` exists, save its id. If not, create one (summary `PM To-dos`, timezone from config). Save id to config.
+   - Tell the user once, on first run, that they can hide this calendar's Free/Busy contribution from primary scheduling in Google Calendar settings → Settings for "PM To-dos" → uncheck "Show in 'Free/Busy' lookups for this user" (or unsubscribe from it when scheduling).
+5. Determine the scan window:
    - `since = last_run_at` if present, else `now - 12h`
    - `until = now`
-5. Update `last_run_at = now` only **after** the run completes successfully.
+6. Update `last_run_at = now` only **after** the run completes successfully.
 
 #### Notion database schema
 
@@ -136,38 +140,60 @@ Before writing, query Notion for existing rows matching each `source_id`:
 - If a match exists and `Status` is `Not started` / `In progress`, update the row only if the due date is now closer or the priority has escalated. Otherwise skip.
 - If no match, it's a new to-do — proceed to write.
 
+### Phase 4.5: Schema sync (Owner options)
+
+Before any `notion-create-pages` call, ensure every `Owner` value in this run's new items already exists as a Notion select option. Notion's API rejects unknown select values rather than auto-creating them.
+
+1. From the data-source schema (already loaded during bootstrap, or fetch via `notion-fetch` on the data source URL), collect the current set of `Owner` options.
+2. Compute `new_owners = {item.owner for item in new_items} - existing_options`.
+3. If `new_owners` is non-empty, call `mcp__276eb2b6-f7d9-4ba0-a00b-e5dc42203619__notion-update-data-source` with a single `ALTER COLUMN "Owner" SET SELECT(...)` statement that lists the union of existing + new options. Pick a color per new option (rotate through `orange`, `pink`, `purple`, `green`, `yellow`, `brown`, `red`, `gray`).
+4. Then proceed to 5a.
+
+This must happen **before** 5a or `notion-create-pages` will fail with `validation_error: Invalid select value for property "Owner"`.
+
 ### Phase 5: Write outputs
 
 For each **new** to-do, do all four writes. Parallelize across destinations per item (they're independent).
 
 #### 5a. Notion
 
-Create a page in the database via `mcp__276eb2b6-f7d9-4ba0-a00b-e5dc42203619__notion-create-pages` with the fields above. Status defaults to `Not started`.
+Create a page in the database via `mcp__276eb2b6-f7d9-4ba0-a00b-e5dc42203619__notion-create-pages` with the fields above. Status defaults to `Not started`. Use `parent: { type: "data_source_id", data_source_id: <cached id> }`.
 
 #### 5b. Google Calendar (only if `due_date` is not null)
 
-Create an **all-day event** on `due_date` via `mcp__8d04fe23-2dbe-401a-b4f1-41d3f620dfff__create_event` with:
+Create a timed 30-minute event on `due_date` via `mcp__8d04fe23-2dbe-401a-b4f1-41d3f620dfff__create_event` with:
 
+- `calendarId`: `<pm_calendar_id>` from config — **always the dedicated PM To-dos calendar, never the primary**. The user controls Free/Busy contribution at the calendar level (Calendar settings → "PM To-dos" → toggle Free/Busy lookups), which is why we use a secondary calendar instead of `transparency` (the current MCP tool doesn't expose `transparency`).
 - `summary`: the task title (prefixed with `[PM]` so it's visually distinct)
 - `description`: `Owner: <owner>\nSource: <source_title>\n<source_link>\nNotion: <notion_page_url>`
-- `start`: `{ "date": "<due_date>" }` (all-day uses date, not dateTime)
-- `end`: `{ "date": "<due_date + 1 day>" }` (Google all-day end is exclusive)
-- `transparency`: `"transparent"` — this is what marks it **"Free" instead of "Busy"**
-- `reminders`: `{ "useDefault": false, "overrides": [{ "method": "popup", "minutes": <minutes from event start (midnight America/Denver) to 7:30 AM America/Denver> }] }`
-  - For an event starting at local midnight, 7:30 AM is `-450` minutes... but Google requires non-negative minutes-before-start. Since the event is all-day starting 00:00 local, set `minutes: 0` and use a timed reminder by **not using all-day**: instead create a **timed 30-minute event from 07:30 to 08:00 America/Denver on the due date** with `transparency: "transparent"`. The user wanted an all-day-style block; "all-day" in Google with a 7:30 AM reminder is contradictory because all-day events' reminders are anchored at midnight. Use a timed transparent event from 07:30 to 08:00 local with a `popup` reminder of `minutes: 0`. This is functionally the user's request: shows on the day, fires at 7:30 AM MST, doesn't block calendar.
-- `timeZone`: `"America/Denver"` on `start.dateTime` and `end.dateTime`
+- `timeZone`: `"America/Denver"`
+- `startTime` / `endTime`: 30-minute window on the due date. Use the **same-day timing rule** below.
+- `notificationLevel`: `"NONE"` and `overrideReminders`: `[{ "method": "popup", "minutes": 0 }]` — popup fires at event start.
+- `colorId`: `"8"` (Graphite) so PM events are visually distinct.
+
+**Same-day timing rule** (so popups actually fire — otherwise events created after 07:30 AM on the due date never notify):
+- If `due_date` is in the future: `startTime = 07:30`, `endTime = 08:00` local on `due_date`.
+- If `due_date == today` and `now < 07:30 local`: same as above.
+- If `due_date == today` and `now >= 07:30 local`: `startTime = now + 5 minutes` (rounded to next minute), `endTime = startTime + 30 minutes`. The popup will fire in 5 minutes.
+- If `due_date < today` (overdue, e.g. carry-over): `startTime = now + 5 minutes` on today, `endTime = startTime + 30 minutes`, and prepend `[OVERDUE] ` to the summary.
 
 #### 5c. Gmail draft digest
 
-Accumulate all new to-dos in memory during the run. At the end, create ONE Gmail draft via `mcp__4ded26b1-aba6-4737-a3ea-03075caa460d__create_draft`:
+Accumulate all new to-dos in memory during the run. Also fetch **carry-over items** from Notion: open rows (`Status` in {`Not started`, `In progress`}) where `Due Date <= today` and `source_id` was created in a prior run (i.e., not in this run's new set). Use `notion-query-database-view` with a filter on `Status` and `Due Date`.
+
+At the end, create ONE Gmail draft via `mcp__4ded26b1-aba6-4737-a3ea-03075caa460d__create_draft`:
 
 - `to`: the user's own email (from `user_emails[0]`)
 - `subject`: `PM digest — <YYYY-MM-DD> <Morning|EOD>` (pick label from run-time hour; Morning if local hour < 14, else EOD)
-- `body`: markdown-style text grouped by source. For each item:
-  - `• [Owner] Task — due YYYY-MM-DD (Priority) — <source_title> <source_link>`
-  - End with a "Things others owe me" section listing items where `owner != "Me"`.
+- `body`: markdown-style text with these sections, in order:
+  1. **Top-line scan stats** (sources hit, counts, any errored sources).
+  2. **MY TO-DOS** — new items from this run where `owner == "Me"`. Format:
+     `• [Me] Task — due YYYY-MM-DD (Priority) — <source_title> <link>`
+  3. **THINGS OTHERS OWE ME** — new items where `owner != "Me"`.
+  4. **CARRY-OVER (due today or overdue)** — open prior-run rows from the Notion query above, grouped: `Overdue` first (due_date < today), then `Today`. Include the Notion page URL so the user can flip Status. Skip this section if empty.
+  5. **LINKS** — Notion DB URL.
 
-If zero new to-dos, do **not** create a draft.
+If this run produced zero new to-dos **and** there are zero carry-over items, do **not** create a draft. If there are no new items but there are carry-over items, still create the draft with just the carry-over section so the user sees what's still open.
 
 #### 5d. Local markdown file
 
@@ -183,6 +209,9 @@ Append to `~/todos/<YYYY-MM-DD>.md` (create the dir/file if missing). Format:
 
 ### Others owe me
 - [ ] @<owner>: <task> — due <date> — <source> — <source_link>
+
+### Carry-over (due today / overdue)
+- [ ] <task> — due <date> — <Notion link>     <!-- omit section if empty -->
 ```
 
 ### Phase 6: Persist state & summarize
@@ -218,7 +247,9 @@ When the user asks "what's on my plate", "what's outstanding", or "today's to-do
   "user_emails": ["jordan@example.com"],
   "user_aliases": ["JDS", "Jordan"],
   "notion_db_id": "abc123...",
+  "notion_data_source_id": "def456...",
   "notion_db_name": "AI To-Dos",
+  "pm_calendar_id": "abc...@group.calendar.google.com",
   "last_run_at": "2026-05-19T08:00:00-06:00",
   "local_todo_dir": "/home/user/todos",
   "timezone": "America/Denver"
@@ -230,9 +261,11 @@ Create the file with empty/default values if it doesn't exist. Persist after eve
 ## What NOT to do
 
 - Do not ask the user to approve to-dos before writing.
-- Do not create calendar events with `transparency: "opaque"` — they must be Free, not Busy.
+- Do not create calendar events on the primary calendar — always on `pm_calendar_id`. (Free/Busy is handled at the calendar level, not per-event.)
 - Do not create duplicate Notion rows. Always check `Source ID` first.
+- Do not call `notion-create-pages` before Phase 4.5 (Owner schema sync) — unknown select values cause `validation_error`.
 - Do not invent due dates with high confidence. If the source doesn't state one, mark `Confidence: Low`.
 - Do not send the Gmail digest — only create the draft.
 - Do not process emails in Promotions/Social/Updates categories.
 - Do not write to the Notion DB before confirming you have the right database id.
+- Do not block the whole run if one source is unavailable (e.g., Fathom MCP disconnected). Note it in the digest's scan-stats line and continue.
