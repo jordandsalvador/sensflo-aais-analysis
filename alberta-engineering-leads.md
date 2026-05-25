@@ -5,7 +5,7 @@
 
 ## Purpose
 
-B2B sales-prospecting research for a web-services agency (Advisor AI Solutions / SensFlo).
+B2B sales-prospecting research for a web-services agency.
 Goal: identify Alberta engineering firms with **no website, broken, or outdated websites**, then find
 the **decision-maker** (owner / president / founder / responsible P.Eng.) and any publicly available
 contact info for outreach.
