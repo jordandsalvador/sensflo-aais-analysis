@@ -4,7 +4,7 @@
 > Claude session, skill, or automation can navigate it without re-discovering structure.
 > Treat this as the source of truth for page/database IDs, schemas, conventions, and brand.
 >
-> **Last verified:** 2026-05-23 · **Owner:** Jordan Salvador (jordan@advisoraisolutions.com)
+> **Last verified:** 2026-06-14 · **Owner:** Jordan Salvador (jordan@advisoraisolutions.com)
 > **Maintainer note:** if you restructure the workspace, update this file in the same change.
 
 ---
@@ -218,7 +218,20 @@ On-brand gradient banners (navy→teal base + gold glow) are used as page/databa
 
 ---
 
-## 7. Archived / deleted (2026-05-23 reorg)
+## 7. Integrations & connected accounts
+
+The `accountability-pm` skill (and any session driving this workspace) reaches external systems
+through the following MCP connections. Update this section whenever an account is swapped.
+
+| System | Account | Notes |
+|---|---|---|
+| **Notion** | jordan@advisoraisolutions.com workspace | This doc lives in that workspace's data sources. |
+| **Gmail** | `jordan@advisoraisolutions.com` (primary) · `jordandsalvador@hotmail.com` (alias) | Both addresses are listed in the skill's `user_emails` so PM mode correctly attributes "Me" vs others. |
+| **Google Calendar** | `jordan@advisoraisolutions.com` | Also the `pm_calendar_fallback` when a dedicated `PM To-dos` calendar doesn't exist (`pm_calendar_id` currently null). |
+| **Fathom** | `jordan@advisoraisolutions.com` (switched **2026-06-14** from `jordandsalvador@hotmail.com`) | New transcripts/action items will record this as `Source Account` going forward. The legacy hotmail transcript on the Jamie Pfeffer row is historical and intentionally left as-is. |
+| **Zoom** | (unverified at last edit — check `get_meeting_assets` permissions on a recent call to confirm) | Used for cloud recordings + AI summaries. |
+
+## 8. Archived / deleted (2026-05-23 reorg)
 
 - **Legacy podcast "Tasks" DB** (data_source `ace96df5-1e73-41fe-af29-31a5355fbd68`,
   container `64982fa573ec4a7597cde2a9afe5075e`) — was empty; moved to Notion trash. The master
@@ -228,7 +241,7 @@ On-brand gradient banners (navy→teal base + gold glow) are used as page/databa
 
 ---
 
-## 8. Conventions for future edits
+## 9. Conventions for future edits
 
 - Database titles carry a leading emoji that matches the data source icon (🗓️ 🎯 🤝 📌 🗣️ 📥 ✅ 🤖 🧲 🎧 📝).
 - View names are emoji-prefixed and action-oriented (`🚦 Board`, `📆 Calendar`, `🔥 High priority`, `📋 All …`).
