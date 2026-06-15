@@ -72,8 +72,36 @@ Create with these properties (names matter — the rest of the skill assumes the
 | `Confidence` | Select | `High`, `Medium`, `Low`. |
 | `Created` | Created time | Auto. |
 | `Notes` | Rich text | One-line evidence quote from the source. |
+| `Calendar Event ID` | Rich text | Cached id of the `[PM]` reminder event, written by Phase 5b. Used by Phase 0 to delete the reminder when the to-do is auto-closed. |
 
-### Phase 2: Pull source data
+### Phase 0: Verify-and-close (continuous improvement loop)
+
+Runs **after Phase 1, before Phase 2**. Closes to-dos that real-world activity already
+completed so the next phases don't re-surface them and you stop seeing stale reminders.
+
+**Load open to-dos.** Query Notion for rows with `Status` in {`Not started`, `In progress`}
+created before `now - 6h` (skip very-fresh rows so an in-flight scan doesn't shadow itself).
+
+**For each open row, build verification probes from `Task` + `Source Title`:**
+
+| Task pattern | Probe |
+|---|---|
+| "Send X calendar invite for [date]" / "Send X calendar event …" | `list_events(fullText="X", startTime=date−1d, endTime=date+1d)` on the user's calendars. Match: an event on the target date with X (or X's email) as an attendee, **created after the to-do's row was created**. |
+| "Email/Send X …" / "Follow up with X re Y" | `search_threads(query="in:sent newer_than:<days_since_created> X")`. Match: at least one sent thread to X with a subject keyword overlap (≥1 substantive noun from the task). |
+| "Wait for X to send/confirm/reply …" | `search_threads(query="from:X newer_than:<days_since_created>")` on the source thread or inbox. Match: a reply from X in the relevant thread. |
+| "Review / read / open X" (no external party) | Skip auto-verification (no observable signal). |
+
+**Confidence ladder** (conservative — false-Dones are worse than false-opens):
+- **High** — exact attendee+date match on calendar, OR sent thread with explicit subject-overlap to the named recipient in the right window. **Action: auto-mark Done.**
+- **Medium / fuzzy** — recipient appears in sent mail but subject doesn't clearly overlap, OR calendar event matches name but not date. **Action: do not auto-close.** Add to a `LIKELY DONE — PLEASE CONFIRM` section in the digest (§5c) with the evidence and a one-click Notion link.
+- **None + due_date < today − 14d** — set `Status = Blocked`, append `Notes`: `stale, please triage (no activity in 14d)`.
+
+**On auto-close (High match only):**
+1. `notion-update-page` with `Status = Done` and `Notes += "VERIFIED DONE <ISO date>. <evidence: event id or sent thread id>. Auto-closed by verify sweep."`
+2. If `Calendar Event ID` is non-empty, `delete_event(eventId=<that>, calendarId=<pm_calendar_id>, notificationLevel="NONE")`. Silently ignore 404 (already deleted).
+3. Append a line to `lessons.md` (see Phase 7): `auto-closed <source_id> via <probe-type>`.
+
+Track counters (`auto_closed`, `flagged_likely_done`, `stale_blocked`) for the digest header.
 
 Run these in **parallel** (one tool call per source):
 
@@ -177,6 +205,8 @@ Create a timed 30-minute event on `due_date` via `mcp__8d04fe23-2dbe-401a-b4f1-4
 - If `due_date == today` and `now >= 07:30 local`: `startTime = now + 5 minutes` (rounded to next minute), `endTime = startTime + 30 minutes`. The popup will fire in 5 minutes.
 - If `due_date < today` (overdue, e.g. carry-over): `startTime = now + 5 minutes` on today, `endTime = startTime + 30 minutes`, and prepend `[OVERDUE] ` to the summary.
 
+**After the event is created**, immediately `notion-update-page(page_id=<notion row>, command="update_properties", properties={"Calendar Event ID": "<event.id>"})` so Phase 0 can delete the reminder cleanly when the to-do flips to Done.
+
 #### 5c. Gmail draft digest
 
 Accumulate all new to-dos in memory during the run. Also fetch **carry-over items** from Notion: open rows (`Status` in {`Not started`, `In progress`}) where `Due Date <= today` and `source_id` was created in a prior run (i.e., not in this run's new set). Use `notion-query-database-view` with a filter on `Status` and `Due Date`.
@@ -190,8 +220,9 @@ At the end, create ONE Gmail draft via `mcp__4ded26b1-aba6-4737-a3ea-03075caa460
   2. **MY TO-DOS** — new items from this run where `owner == "Me"`. Format:
      `• [Me] Task — due YYYY-MM-DD (Priority) — <source_title> <link>`
   3. **THINGS OTHERS OWE ME** — new items where `owner != "Me"`.
-  4. **CARRY-OVER (due today or overdue)** — open prior-run rows from the Notion query above, grouped: `Overdue` first (due_date < today), then `Today`. Include the Notion page URL so the user can flip Status. Skip this section if empty.
-  5. **LINKS** — Notion DB URL.
+  4. **LIKELY DONE — PLEASE CONFIRM** — Phase 0 fuzzy matches (see Phase 0 confidence ladder). Each line: task + Notion URL + 1-line evidence. Omit section if empty.
+  5. **CARRY-OVER (due today or overdue)** — open prior-run rows from the Notion query above, grouped: `Overdue` first (due_date < today), then `Today`. Include the Notion page URL so the user can flip Status. Skip this section if empty.
+  6. **LINKS** — Notion DB URL.
 
 If this run produced zero new to-dos **and** there are zero carry-over items, do **not** create a draft. If there are no new items but there are carry-over items, still create the draft with just the carry-over section so the user sees what's still open.
 
@@ -218,8 +249,31 @@ Append to `~/todos/<YYYY-MM-DD>.md` (create the dir/file if missing). Format:
 
 1. Write `last_run_at = now` to `config.json`.
 2. Output a one-paragraph summary to the user:
-   - `Scanned N emails, M meetings. Found X new to-dos (Y mine, Z owed). Wrote to Notion, calendar (W events), Gmail draft. Markdown at <path>.`
+   - `Scanned N emails, M meetings. Verify-and-close: A auto-Done, B flagged likely-done, C stale-blocked. Found X new to-dos (Y mine, Z owed). Wrote to Notion, calendar (W events), Gmail draft. Markdown at <path>.`
 3. If any phase errored partially (e.g., one source failed), say which and continue — never block the whole run on one failure.
+
+### Phase 7: Lessons log (self-improvement)
+
+Append one block per run to `~/.claude/skills/accountability-pm/lessons.md` (create if missing):
+
+```
+## <ISO datetime> — <Morning|EOD>
+- window: <since> → <until>
+- sources hit: gmail=<n>, fathom=<n>, zoom=<n>
+- verify: auto_closed=<n>, flagged=<n>, stale_blocked=<n>
+- writes: new=<n>, mine=<n>, owed=<n>
+- false-positive probes this run: <list of (source_id, why) — populated when the user later
+  reopens an auto-closed row OR overrides a flagged-likely-done item to Not Done>
+- new owner options synced: <list>
+- notes: <free-form observations: tool errors, schema drift, edge cases hit>
+```
+
+**Read-back on next run:** at Phase 0, also read the last 5 lessons blocks. Use them to:
+- Avoid known false-positive probe patterns (e.g., "if `task` matches pattern X and probe was Gmail-sent, downgrade to fuzzy — last sweep had 3 false-Dones on that shape").
+- Skip Owner synonyms the user has previously corrected.
+- Adjust the `stale_blocked` threshold if the user keeps un-blocking auto-blocked items.
+
+Keep the file under ~500 lines; trim oldest blocks past that.
 
 ## Riverside mode
 
@@ -252,7 +306,13 @@ When the user asks "what's on my plate", "what's outstanding", or "today's to-do
   "pm_calendar_id": "abc...@group.calendar.google.com",
   "last_run_at": "2026-05-19T08:00:00-06:00",
   "local_todo_dir": "/home/user/todos",
-  "timezone": "America/Denver"
+  "timezone": "America/Denver",
+  "verify_loop": {
+    "enabled": true,
+    "min_row_age_hours": 6,
+    "stale_block_days": 14,
+    "auto_delete_pm_event_on_close": true
+  }
 }
 ```
 
@@ -269,3 +329,5 @@ Create the file with empty/default values if it doesn't exist. Persist after eve
 - Do not process emails in Promotions/Social/Updates categories.
 - Do not write to the Notion DB before confirming you have the right database id.
 - Do not block the whole run if one source is unavailable (e.g., Fathom MCP disconnected). Note it in the digest's scan-stats line and continue.
+- Do not auto-mark Done on a Medium/fuzzy verify match. Surface those in `LIKELY DONE — PLEASE CONFIRM` and let the user close them. False-Dones erode trust faster than false-opens.
+- Do not delete a calendar event whose id you didn't write yourself. Only delete events whose id is stored in the corresponding to-do's `Calendar Event ID` property.

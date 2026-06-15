@@ -4,7 +4,7 @@
 > Claude session, skill, or automation can navigate it without re-discovering structure.
 > Treat this as the source of truth for page/database IDs, schemas, conventions, and brand.
 >
-> **Last verified:** 2026-06-14 · **Owner:** Jordan Salvador (jordan@advisoraisolutions.com)
+> **Last verified:** 2026-06-15 · **Owner:** Jordan Salvador (jordan@advisoraisolutions.com)
 > **Maintainer note:** if you restructure the workspace, update this file in the same change.
 
 ---
@@ -156,7 +156,8 @@ data source.
 | `Status` | status | `Not started`/`In progress`/`Done`/`Blocked`. |
 | `Priority` | select | `High`/`Medium`/`Low`. |
 | `Confidence` | select | `High`/`Medium`/`Low`. |
-| `Notes` | text | One-line evidence quote. |
+| `Notes` | text | One-line evidence quote. Also appended to by the verify loop. |
+| `Calendar Event ID` | text | Cached id of the `[PM]` reminder event written by Phase 5b. Read by the verify loop to delete the reminder when the to-do is auto-closed. |
 | `Created` | created_time | Auto. |
 
 **Views** (view IDs for direct query):
@@ -169,7 +170,19 @@ data source.
 **Skill config** lives at `~/.claude/skills/accountability-pm/config.json` (container-local,
 not in repo). It caches `notion_db_id`, `notion_data_source_id` (= the IDs above),
 `pm_calendar_id` (currently null → falls back to `jordan@advisoraisolutions.com` Google
-Calendar), `user_emails`, `last_run_at`, `timezone: America/Denver`.
+Calendar), `user_emails`, `last_run_at`, `timezone: America/Denver`, and a `verify_loop`
+block tuning the continuous-improvement loop.
+
+**Continuous-improvement loop** (added 2026-06-15). The skill's SKILL.md defines a
+**Phase 0: Verify-and-close** that runs before each scan and a **Phase 7: Lessons log**
+that runs after. Phase 0 closes to-dos whose completion is already evidenced in Gmail
+Sent or Google Calendar (calendar event w/ attendee+date match, or sent thread w/ subject
+overlap to the named recipient), conservatively — fuzzy matches go to a `LIKELY DONE —
+PLEASE CONFIRM` section of the digest instead of auto-closing. On auto-close, the cached
+`Calendar Event ID` is used to delete the matching `[PM]` reminder. Each run appends to
+`~/.claude/skills/accountability-pm/lessons.md`, and the next run reads the last ~5
+blocks to dampen known false-positive probe patterns. Canonical skill source mirrored at
+`.claude/skills/accountability-pm/` in this repo so it survives container resets.
 
 ---
 
