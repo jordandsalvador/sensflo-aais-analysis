@@ -209,22 +209,63 @@ Create a timed 30-minute event on `due_date` via `mcp__8d04fe23-2dbe-401a-b4f1-4
 
 #### 5c. Gmail draft digest
 
-Accumulate all new to-dos in memory during the run. Also fetch **carry-over items** from Notion: open rows (`Status` in {`Not started`, `In progress`}) where `Due Date <= today` and `source_id` was created in a prior run (i.e., not in this run's new set). Use `notion-query-database-view` with a filter on `Status` and `Due Date`.
+Accumulate new to-dos in memory during the run. Also fetch **carry-over items** from Notion:
+open rows (`Status` in {`Not started`, `In progress`}) where `Due Date <= today` and
+`source_id` was created in a prior run. Use `notion-query-database-view`.
 
-At the end, create ONE Gmail draft via `mcp__4ded26b1-aba6-4737-a3ea-03075caa460d__create_draft`:
+Create ONE Gmail draft via `mcp__4ded26b1-aba6-4737-a3ea-03075caa460d__create_draft`:
 
-- `to`: the user's own email (from `user_emails[0]`)
-- `subject`: `PM digest — <YYYY-MM-DD> <Morning|EOD>` (pick label from run-time hour; Morning if local hour < 14, else EOD)
-- `body`: markdown-style text with these sections, in order:
-  1. **Top-line scan stats** (sources hit, counts, any errored sources).
-  2. **MY TO-DOS** — new items from this run where `owner == "Me"`. Format:
-     `• [Me] Task — due YYYY-MM-DD (Priority) — <source_title> <link>`
-  3. **THINGS OTHERS OWE ME** — new items where `owner != "Me"`.
-  4. **LIKELY DONE — PLEASE CONFIRM** — Phase 0 fuzzy matches (see Phase 0 confidence ladder). Each line: task + Notion URL + 1-line evidence. Omit section if empty.
-  5. **CARRY-OVER (due today or overdue)** — open prior-run rows from the Notion query above, grouped: `Overdue` first (due_date < today), then `Today`. Include the Notion page URL so the user can flip Status. Skip this section if empty.
-  6. **LINKS** — Notion DB URL.
+- `to`: `user_emails[0]`
+- `subject`: `PM digest — <YYYY-MM-DD> <Morning|EOD>` (Morning if local hour < 14, else EOD).
+  Keep the ISO date so drafts sort — do not swap in a friendly date.
+- `body`: plain-text fallback (see below).
+- `htmlBody`: canonical rich draft (spec below).
 
-If this run produced zero new to-dos **and** there are zero carry-over items, do **not** create a draft. If there are no new items but there are carry-over items, still create the draft with just the carry-over section so the user sees what's still open.
+**Rendering rules — this is a design contract, not a suggestion.** Gmail strips `<style>` in
+head; use inline styles only. Skip any section that would be empty (no "(0 items)"
+placeholders). Every task title is a hyperlink whose anchor text IS the task title — **never
+show bare URLs** in the body. Sections appear in this order, top to bottom:
+
+1. **Header block** — navy `#0B1F3A` background, 8px top corner radius, white text.
+   Contains: `PM DIGEST` label in gold `#D4AF37` (10px, 0.16em letter-spacing, uppercase);
+   below it `<Weekday · Mon DD · Morning|EOD>` (20px, white, weight 600); below that the
+   scan meta line: `Verify-loop: X auto-closed · Sources: N emails / M meetings (since <ISO>)`
+   in 12px muted white with the `X auto-closed` count highlighted with a teal pill.
+2. **Auto-closed** — teal `#1C6E71` uppercase section header `✓ AUTO-CLOSED (n)`. Each row:
+   a checkmark, the task title (greyed), and a 1-line evidence tag in even-more-muted grey
+   (`— calendar` / `— Sent mail 6/10` / etc.). Not linked — these are closed.
+3. **LIKELY DONE — PLEASE CONFIRM** — teal header. Same visual pattern, but each task title
+   IS a hyperlink to Notion. One-line evidence beside it.
+4. **Due today** — gold `#D4AF37` uppercase section header `🔥 DUE TODAY · <Weekday M/D> (n)`.
+   Table rows: `@Owner Name` column (100px, 12px muted grey) + linked task title.
+5. **Mine — this week** — teal header `MINE — THIS WEEK (n)`. Table rows: `Wkd M/D` column
+   (64px, 12px muted grey, tabular-nums) + linked task title. Only rows where `owner == "Me"`
+   and `today < due_date <= today + 7`.
+6. **Owed by others — this week** — teal header. Same table shape as Mine. Task title
+   prefixed `@Owner: ` inside the anchor text.
+7. **Carry-over callout** — a single boxed line, background `#faf9f5`, left border 3px gold:
+   `**N overdue** from prior runs · Triage in Notion →` (link to AI To-Dos DB). **Do not
+   enumerate the items.** The count + link is the whole section.
+8. **Footer** — thin grey top border, 11px muted links: `AI To-Dos DB · Home · Window: <since> → <until>`.
+
+**Colors (canonical, do not drift):** navy `#0B1F3A` primary · gold `#D4AF37` accent
+(headers of "due today" + carry-over left border + PM DIGEST label) · teal `#1C6E71`
+supporting (other section headers + carry-over triage link) · row hairline `#f0eee9` ·
+muted meta `#888` · callout background `#faf9f5`.
+
+**Typography:** `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
+Arial, sans-serif`. Section headers 10px + 0.12em letter-spacing + uppercase + weight 700.
+Task rows 14px, weight 500. Meta cells 12px, weight normal.
+
+**Layout:** 620px max-width, centered, 24px top margin. Header padding 20px 22px; body
+padding 20px 22px; sections separated by 24px bottom-margin.
+
+**Plain-text `body` fallback** — mirror the section order and titles, but use CAPS section
+headers, `✓` for auto-closed, two-space indent for rows, and bare URLs in a footer block
+only. Keep it under ~40 lines. Purpose is only for clients that ignore `htmlBody`.
+
+**Skip-the-draft rule:** if zero new items AND zero auto-closed AND zero fuzzy-flagged AND
+zero carry-over → do NOT create a draft. Every other case creates one.
 
 #### 5d. Local markdown file
 
@@ -331,3 +372,5 @@ Create the file with empty/default values if it doesn't exist. Persist after eve
 - Do not block the whole run if one source is unavailable (e.g., Fathom MCP disconnected). Note it in the digest's scan-stats line and continue.
 - Do not auto-mark Done on a Medium/fuzzy verify match. Surface those in `LIKELY DONE — PLEASE CONFIRM` and let the user close them. False-Dones erode trust faster than false-opens.
 - Do not delete a calendar event whose id you didn't write yourself. Only delete events whose id is stored in the corresponding to-do's `Calendar Event ID` property.
+- Do not emit markdown `##` headers, bullet dashes, or bare URLs in the Gmail digest body — Gmail renders them as literal characters. Use the HTML digest spec in Phase 5c; keep the plain-text `body` as a fallback only.
+- Do not enumerate carry-over items in the digest. A count + Notion link is the whole section. If the user needs the full list they open the DB.
