@@ -189,11 +189,11 @@ Create a page in the database via `mcp__276eb2b6-f7d9-4ba0-a00b-e5dc42203619__no
 
 #### 5b. Google Calendar (only if `due_date` is not null)
 
-Create a timed 30-minute event on `due_date` via `mcp__8d04fe23-2dbe-401a-b4f1-41d3f620dfff__create_event` with:
+Create a timed 30-minute event on `due_date` via the Google Calendar MCP `create_event` tool with:
 
 - `calendarId`: `<pm_calendar_id>` from config — **always the dedicated PM To-dos calendar, never the primary**. The user controls Free/Busy contribution at the calendar level (Calendar settings → "PM To-dos" → toggle Free/Busy lookups), which is why we use a secondary calendar instead of `transparency` (the current MCP tool doesn't expose `transparency`).
-- `summary`: the task title (prefixed with `[PM]` so it's visually distinct)
-- `description`: `Owner: <owner>\nSource: <source_title>\n<source_link>\nNotion: <notion_page_url>`
+- `summary`: the task title, **verbatim** — no `[PM]` prefix, no bracketed tags. `colorId` already differentiates PM events; a text prefix is redundant clutter in the reminder popup.
+- `description`: **exactly one line**, format `Notion: <notion_page_url>`. Nothing else — no `Owner:`, no `Source:`, no duplicate source link. The Notion row is the record; the calendar event is a nudge. If the user wants context, one click takes them there.
 - `timeZone`: `"America/Denver"`
 - `startTime` / `endTime`: 30-minute window on the due date. Use the **same-day timing rule** below.
 - `notificationLevel`: `"NONE"` and `overrideReminders`: `[{ "method": "popup", "minutes": 0 }]` — popup fires at event start.
